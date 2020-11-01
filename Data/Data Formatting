@@ -1,0 +1,488 @@
+setwd("C:\\Users\\gibsond\\Desktop\\Ducks\\NA_CEC_Eco_Level3")
+rm(list=ls())
+require(sp)
+library(RColorBrewer)
+library(maps)
+library(rgdal)
+library(mapproj)
+library(rgeos)
+library(maptools)
+library(raster)
+
+
+ecorgns <- readOGR(dsn = ".", layer = 'NA_CEC_Eco_Level3')
+names(ecorgns)
+
+
+system <- "ARCTIC CORDILLERA|NORTH AMERICAN DESERTS|MEDITERRANEAN CALIFORNIA|SOUTHERN SEMIARID HIGHLANDS|TEMPERATE SIERRAS|TROPICAL DRY FORESTS|TROPICAL WET FORESTS|TUNDRA|TAIGA|HUDSON PLAIN|NORTHERN FORESTS|NORTHWESTERN FORESTED MOUNTAINS|MARINE WEST COAST FOREST|EASTERN TEMPERATE FORESTS|GREAT PLAINS"
+
+
+rgn <- subset(ecorgns, grepl(system, NA_L1NAME))
+rgn <- spTransform(rgn, CRS("+proj=longlat +datum=NAD83 +no_defs +ellps=GRS80 +towgs84=0,0,0"))
+join.rgn <- aggregate(rgn, dissolve=T)
+
+
+#------------------------------------------------------------------------------
+# Data manipulation of banding data 
+#------------------------------------------------------------------------------
+
+# Read in dataset
+setwd("C:\\Users\\gibsond\\Desktop\\Ducks\\Data")
+
+raw.band<-read.csv("releases.csv")  #reading in CSV
+tail(raw.band) #Unknown number records
+dim(raw.band)  #71193 records 43 variables
+
+summary(raw.band)
+
+########################################################################
+#cleaning data
+########################################################################
+
+#only use status 3 birds
+clean.re_ca <-subset(raw.band,Status==3)                #69,363 note:records refer to "count of birds" not n banded
+
+clean.re_ca$Count.of.Birds <- as.numeric(clean.re_ca$Count.of.Birds)
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# NEED TO THINK ABOUT WHAT SEASONS TO CONSIDER
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+aggregate(clean.re_ca$Count.of.Birds, by=list(Category=clean.re_ca$Region..State), FUN=sum)
+
+summary(clean.re_ca$Count.of.Birds)
+
+#only use B.Year from 1951 onwards
+clean.re_ca<-subset(clean.re_ca,B.Year>=1951)          #65,199 bandings 1951-present
+
+#remove unknown sex
+clean.re_ca<-subset(clean.re_ca,Sex!=0)                #64,649 records (418 excluded)
+
+#remove sex determined subsequent
+clean.re_ca<-subset(clean.re_ca,Sex!=6)                #64,644 records   #!remove (5) males from subs encounter
+clean.re_ca<-subset(clean.re_ca,Sex!=7)                #64,639 records   #!remove (5) females from subs encounter
+
+#remove unknown Banding Flyway
+clean.re_ca<-subset(clean.re_ca,B.Flyway!=0)           # No one removed
+
+# Add Info include ==
+#0-Fed band, 4-control band, 14-oral swab, 16-trach swab, 18-blood sample, 70-spotlight capture
+clean.re_ca<-subset(Add.Info==0 | Add.Info==4 | Add.Info==6 |Add.Info==7 |
+                       Add.Info==8 | Add.Info==14 |Add.Info==15 | Add.Info==16 | 
+                       Add.Info==18 | Add.Info==19 | Add.Info==25 |
+                       Add.Info==39 | Add.Info==51 |
+                       Add.Info==70| Add.Info==71| Add.Info==89)
+# restrict B.month 1 Jun-30 Sept
+clean.re_ca$Regime <- ifelse(clean.re_ca$B.Month==6|clean.re_ca$B.Month==7| clean.re_ca$B.Month==8| clean.re_ca$B.Month==9,"B",
+                             ifelse(clean.re_ca$B.Month==10| clean.re_ca$B.Month==11| clean.re_ca$B.Month==12,"F",
+                                    ifelse(clean.re_ca$B.Month==1| clean.re_ca$B.Month==2| clean.re_ca$B.Month==3,"W",'E'))) 
+
+#remove unknown age
+clean.re_ca<-subset(clean.re_ca,Age!=0)           #60,261 records #!remove 51 unknown age
+
+#Age class variable
+table(clean.re_ca$Age_VAGE)
+
+# create new variable, banding age: 0 = local, 1=juv, 2=adult (0 TY and ATY) 
+clean.re_ca$b_age   <- ifelse(clean.re_ca$Age_VAGE=="After Hatch Year", 2,
+                               ifelse(clean.re_ca$Age_VAGE=="After Second Year", 2,
+                                      ifelse(clean.re_ca$Age_VAGE=="After Third Year", 2,
+                                             ifelse(clean.re_ca$Age_VAGE=="Third Year", 2,
+                                                    ifelse(clean.re_ca$Age_VAGE=="Hatch Year", 1,
+                                                           ifelse(clean.re_ca$Age_VAGE=="Juvenile (obsolete)",1,
+                                                                  ifelse(clean.re_ca$Age_VAGE=="Local",1,
+                                                                         ifelse(clean.re_ca$Age_VAGE=="Second Year" & clean.re_ca$Regime == 'W',1, 2))))))))
+xy <- clean.re_ca[,c(33,32)]
+
+
+
+clean.re_ca$TYPE <- ifelse(clean.re_ca$Band.Type == '00' | clean.re_ca$Band.Type == '11'| clean.re_ca$Band.Type == '12' | clean.re_ca$Band.Type == '13'| clean.re_ca$Band.Type == '18'|clean.re_ca$Band.Type == '21', 1,
+                           ifelse(clean.re_ca$Band.Type == '01' | clean.re_ca$Band.Type == '04'| clean.re_ca$Band.Type == '08' | clean.re_ca$Band.Type == '51' | clean.re_ca$Band.Type == '53', 2,
+                                  3))
+
+spdf <- SpatialPoints(coords = xy,  proj4string = CRS(proj4string(rgn)))
+
+region <- spdf %over% rgn
+
+clean.re_ca$L3 <- region$NA_L3NAME
+clean.re_ca$L2 <- region$NA_L2NAME
+clean.re_ca$L1 <- region$NA_L1NAME
+
+
+
+ggplot(data =  clean.re_ca, aes(y= GISBLat,  x= GISBLong, color = L1)) +
+   geom_point() +
+   coord_map()
+
+
+#------------------------------------------------------------------------------
+# Data manipulation of recovery data 
+#------------------------------------------------------------------------------
+setwd('C:\\Users\\gibsond\\Desktop\\Ducks\\Data')
+raw.recovs<-read.csv("encounters.csv")  #reading in CSV
+tail(raw.recovs) #Unknown number records
+dim(raw.recovs)  #88,411 records 71 variables
+
+summary(raw.recovs)
+
+########################################################################
+#cleaning data
+########################################################################
+
+#only use status 3 birds
+re_cai.recov <-subset(raw.recovs,Status==3)              # 86,428
+nrow(re_cai.recov)
+# only use HSS = 1
+re_cai.recov <-subset(re_cai.recov, Hunt..Season.Surv.>= 1)            
+# Exclude unlikely 99's
+
+re_cai.recov <-subset(re_cai.recov, Hunt..Season.Surv.!= 99 | Hunt..Season.Surv.== 99 & (R.Year - B.Year) < 20) 
+re_cai.recov <- subset(re_cai.recov, Band.Type.Orig != 98)
+
+#only use B.Year from 1951 onwards
+re_cai.recov<-subset(re_cai.recov,B.Year>=1951)          # 82,107 
+nrow(re_cai.recov)
+#remove unknown sex
+re_cai.recov<-subset(re_cai.recov,Sex!=0)                # 81,350
+nrow(re_cai.recov)
+#remove sex determined subsequent
+re_cai.recov<-subset(re_cai.recov,Sex!=6)           # 81,345 records   #!remove (1) males from subs encounter
+re_cai.recov<-subset(re_cai.recov,Sex!=7)           # 81,339 records   #!remove (0) females from subs encounter
+
+re_cai.recov$Sex<-factor(re_cai.recov$Sex)
+
+nrow(re_cai.recov)
+#remove unknown Banding Flyway 0 and Central America 7
+
+re_cai.recov$Region..Flyway<-factor(re_cai.recov$Region..Flyway)
+table (re_cai.recov$Region..Flyway)
+
+
+re_cai.recov$TYPE  <-   ifelse(  re_cai.recov$Band.Type.Orig == 11 | 
+                                 re_cai.recov$Band.Type.Orig == 12 |
+                                 re_cai.recov$Band.Type.Orig == 13 | 
+                                 re_cai.recov$Band.Type.Orig == 18 |
+                                 re_cai.recov$Band.Type.Orig == 21 , 1,
+                         ifelse( re_cai.recov$Band.Type.Orig ==  1 | 
+                                 re_cai.recov$Band.Type.Orig == 4|
+                                 re_cai.recov$Band.Type.Orig == 8 |
+                                 re_cai.recov$Band.Type.Orig == 51 | 
+                                 re_cai.recov$Band.Type.Orig == 53, 2, 3))
+
+
+#remove Unknown Recov Flyway 0, Central America 7, South America 8, Caribbean 9
+re_cai.recov <-subset(re_cai.recov, R.Flyway!=0)
+re_cai.recov <-subset(re_cai.recov, R.Flyway!=7)
+re_cai.recov <-subset(re_cai.recov,!grepl('X',R.Flyway))
+re_cai.recov <-subset(re_cai.recov, R.Flyway!=8)
+re_cai.recov <-subset(re_cai.recov, R.Flyway!=9)
+re_cai.recov$R.Flyway<-factor(re_cai.recov$R.Flyway)
+table (re_cai.recov$R.Flyway)
+nrow(re_cai.recov)
+re_cai.recov$RFly..Flyway<-factor(re_cai.recov$RFly..Flyway)
+table (re_cai.recov$RFly..Flyway)
+
+
+
+xy1 <- re_cai.recov[,c('GISBLong','GISBLat')]
+
+spdf1 <- SpatialPoints(coords = xy1,  proj4string = CRS(proj4string(rgn)))
+
+region1 <- spdf1 %over% rgn
+
+re_cai.recov$L3 <- region1$NA_L3NAME
+re_cai.recov$L2 <- region1$NA_L2NAME
+re_cai.recov$L1 <- region1$NA_L1NAME
+
+
+re_cai.recaps     <- subset(re_cai.recov,How.Obt==66)  # 29020 # recaps
+re_cai.found.dead <- subset(re_cai.recov,How.Obt==0)   # 2552 # found dead
+
+# Verify that this is adequate.
+re_cai.other.dead <- subset(re_cai.recov, How.Obt==2|How.Obt==3|How.Obt==4|How.Obt==5|How.Obt==6|How.Obt==7|
+                               How.Obt==9|How.Obt==11|How.Obt==12|How.Obt==13|How.Obt==14|How.Obt==15|
+                               How.Obt==17|How.Obt==18|How.Obt==20|How.Obt==23|How.Obt==26|How.Obt==30|How.Obt==64) # 862
+
+re_cai.other.dead <- subset(re_cai.other.dead , Pres..Cond. <= 5)  # 800 Misc deaths
+
+re_cai.recov <- subset(re_cai.recov,How.Obt==1)        # 46,522 harvest reports
+nrow(re_cai.recov)
+# create new variable, banding age: 1=juv, 2=adult (0 TY and ATY) 
+re_cai.recov$b_age[(re_cai.recov$Age..VAGE=="After Hatch Year")] <- 2
+re_cai.recov$b_age[(re_cai.recov$Age..VAGE=="After Second Year")] <- 2
+re_cai.recov$b_age[(re_cai.recov$Age..VAGE=="Hatch Year")] <- 1
+re_cai.recov$b_age[(re_cai.recov$Age..VAGE=="Local")] <- 0
+
+
+#view n shot birds not dead -condition
+table(re_cai.recov$Condition..VCondition)
+
+re_cai.recaps <- subset(re_cai.recaps, grepl('Alive-Released', Condition..VCondition))
+re_cai.recov  <- subset(re_cai.recov, grepl('Dead', Condition..VCondition))
+
+
+# Double Check
+# Add Info include ==
+#0-Fed band, 4-control band, 6- State/Prov Band, 7 - double marked, 8 - temp mark, 14-oral swab, 16-trach swab, 18-blood sample, 70-spotlight capture     
+re_cai.recov<-subset(re_cai.recov,Add.Info==0 | Add.Info==4 | Add.Info==6 |Add.Info==7 |
+                        Add.Info==8 | Add.Info==14 |Add.Info==15 | Add.Info==16 | 
+                        Add.Info==18 | Add.Info==19 | Add.Info==25 |
+                        Add.Info==39 | Add.Info==51 |
+                        Add.Info==70| Add.Info==71| Add.Info==89)   # 47317
+
+nrow(re_cai.recov)
+# Currently not using recaps
+re_cai.recaps<-subset(re_cai.recaps,Add.Info==0 | Add.Info==4 | Add.Info==6 |Add.Info==7 |
+                         Add.Info==8 | Add.Info==14 | Add.Info==15 |Add.Info==16 | 
+                         Add.Info==18 | Add.Info==19 | Add.Info==25 |
+                         Add.Info==39 | Add.Info==51 |
+                         Add.Info==70| Add.Info==71| Add.Info==89)   # 25875
+
+nrow(re_cai.recaps)
+#Age class variable
+table(re_cai.recov$VAGE)
+
+
+#create new variable 'n_recov' or 'n_recov'
+re_cai.recov$n_recov <- 1
+re_cai.recaps$n_recap <- 1
+
+# Verify Seasonality of banding-regime (Breeding, Winter, E (Early Season), F (Late Season)): currently not using E and F releases
+#restrict B.month 1 Jun-31 Aug
+re_cai.recov$Regime <- ifelse(re_cai.recov$B.Month==6| re_cai.recov$B.Month==7| re_cai.recov$B.Month==8| re_cai.recov$B.Month==9,"B",
+                              ifelse(re_cai.recov$B.Month==10| re_cai.recov$B.Month==11| re_cai.recov$B.Month==12,"F",
+                                     ifelse(re_cai.recov$B.Month==1| re_cai.recov$B.Month==2| re_cai.recov$B.Month==3,"W",'E'))) 
+
+
+re_cai.recaps$Regime <- ifelse(re_cai.recaps$B.Month==6| re_cai.recaps$B.Month==7| re_cai.recaps$B.Month==8| re_cai.recaps$B.Month==9,"B",
+                               ifelse(re_cai.recaps$B.Month==10| re_cai.recaps$B.Month==11| re_cai.recaps$B.Month==12,"F",
+                                      ifelse(re_cai.recaps$B.Month==1| re_cai.recaps$B.Month==2| re_cai.recaps$B.Month==3,"W",'E'))) 
+
+
+re_cai.recaps$Rec.Regime <- ifelse(re_cai.recaps$R.Month==6| re_cai.recaps$R.Month==7| re_cai.recaps$R.Month==8| re_cai.recaps$R.Month==9,"B",
+                                   ifelse(re_cai.recaps$R.Month==10| re_cai.recaps$R.Month==11| re_cai.recaps$R.Month==12,"F",
+                                          ifelse(re_cai.recaps$R.Month==1| re_cai.recaps$R.Month==2| re_cai.recaps$R.Month==3,"W",'E'))) 
+
+
+
+re_cai.recov$b_age   <- ifelse(re_cai.recov$Age..VAGE=="After Hatch Year", 2,
+                               ifelse(re_cai.recov$Age..VAGE=="After Second Year", 2,
+                                      ifelse(re_cai.recov$Age..VAGE=="After Third Year", 2,
+                                             ifelse(re_cai.recov$Age..VAGE=="Third Year", 2,
+                                                    ifelse(re_cai.recov$Age..VAGE=="Hatch Year", 1,
+                                                           ifelse(re_cai.recov$Age..VAGE=="Juvenile (obsolete)",1,
+                                                                  ifelse(re_cai.recov$Age..VAGE=="Local",1,
+                                                                         ifelse(re_cai.recov$Age..VAGE=="Second Year" & re_cai.recov$Regime == 'W',1, 2))))))))
+
+
+re_cai.recaps$b_age   <- ifelse(re_cai.recaps$Age..VAGE=="After Hatch Year", 2,
+                               ifelse(re_cai.recaps$Age..VAGE=="After Second Year", 2,
+                                      ifelse(re_cai.recaps$Age..VAGE=="After Third Year", 2,
+                                             ifelse(re_cai.recaps$Age..VAGE=="Third Year", 2,
+                                                    ifelse(re_cai.recaps$Age..VAGE=="Hatch Year", 1,
+                                                           ifelse(re_cai.recaps$Age..VAGE=="Juvenile (obsolete)",1,
+                                                                  ifelse(re_cai.recaps$Age..VAGE=="Local",1,
+                                                                         ifelse(re_cai.recaps$Age..VAGE=="Second Year" & re_cai.recaps$Regime == 'W',1, 2))))))))
+table(re_cai.recov$b_age)
+
+
+
+
+#restrict R.month 1 Sep -31 Jan,  Fall 93, Winter 92, Hunting Season 94   #14,172
+re_cai.recov <-subset(re_cai.recov, R.Month==9|R.Month==10| R.Month==11|R.Month==12|R.Month==1| R.Month==92|R.Month== 93|R.Month==94) 
+nrow(re_cai.recov)
+
+#remove unknown age
+re_cai.recov<-subset(re_cai.recov,Age!=0)        
+
+re_cai.recaps <-subset(re_cai.recaps,Age!=0)  #1347
+nrow(re_cai.recov)
+
+write.csv(re_cai.recaps, file = 're_cai.recaps.csv')
+write.csv(re_cai.recov, file = 're_cai.recov.csv')
+write.csv(clean.re_ca, file = 'clean.re_ca.csv')
+
+
+keep <- 'EASTERN TEMPERATE FORESTS|GREAT PLAINS|MEDITERRANEAN CALIFORNIA|NORTH AMERICAN DESERTS|NORTHERN FORESTS|NORTHWESTERN FORESTED MOUNTAINS'
+
+
+ clean.re_ca_sub <- subset( clean.re_ca, grepl(keep, L1))
+re_cai.recov_sub <- subset(re_cai.recov, grepl(keep, L1))
+
+
+
+
+library(dplyr)
+clean.re_ca_sub$ecoregion <- recode( clean.re_ca_sub$L1,
+                                      "GREAT PLAINS" = 1, 
+                                      "NORTHERN FORESTS"   = 2,
+                                      "EASTERN TEMPERATE FORESTS" =3,     
+                                      "NORTH AMERICAN DESERTS" =4,
+                                      "NORTHWESTERN FORESTED MOUNTAINS" =5,
+                                      "MEDITERRANEAN CALIFORNIA" = 5  )
+re_cai.recov_sub$ecoregion <- recode(re_cai.recov_sub$L1,
+                                     "GREAT PLAINS" = 1, 
+                                     "NORTHERN FORESTS"   = 2,
+                                     "EASTERN TEMPERATE FORESTS" =3,     
+                                     "NORTH AMERICAN DESERTS" =4,
+                                     "NORTHWESTERN FORESTED MOUNTAINS" =5,
+                                     "MEDITERRANEAN CALIFORNIA" = 5  )
+
+
+clean.re_ca_sub$PPH <-    ifelse(clean.re_ca_sub$Region..State == 'Alberta'| 
+                                  clean.re_ca_sub$Region..State == 'Saskatchewan'|
+                                  clean.re_ca_sub$Region..State == 'Manitoba'|
+                                  clean.re_ca_sub$Region..State == 'Montana'|
+                                  clean.re_ca_sub$Region..State == 'North Dakota'|
+                                  clean.re_ca_sub$Region..State == 'South Dakota'|
+                                  clean.re_ca_sub$Region..State == 'Minnesota',1,0)
+
+re_cai.recov_sub$PPH <-      ifelse(re_cai.recov_sub$BRegion..State == 'Alberta'| 
+                                    re_cai.recov_sub$BRegion..State == 'Saskatchewan'|
+                                    re_cai.recov_sub$BRegion..State == 'Manitoba'|
+                                    re_cai.recov_sub$BRegion..State == 'Montana'|
+                                    re_cai.recov_sub$BRegion..State == 'North Dakota'|
+                                    re_cai.recov_sub$BRegion..State == 'South Dakota'|
+                                    re_cai.recov_sub$BRegion..State == 'Minnesota',1,0)
+
+
+clean.re_ca_sub$sex    <- recode(clean.re_ca_sub$Sex..VSEX, "Female" = 1, 'Male' = 2)
+clean.re_ca_sub$species<- recode(clean.re_ca_sub$Species.Game.Birds..Species , "Canvasback" = 1, 'Redhead' = 2)
+clean.re_ca_sub$age    <- ifelse(clean.re_ca_sub$b_age == 2, 2, 1)
+
+re_cai.recov_sub$sex    <- recode(re_cai.recov_sub$Sex..VSEX, "Female" = 1, 'Male' = 2)
+re_cai.recov_sub$species<- recode(re_cai.recov_sub$Species.Game.Birds..Species , "Canvasback" = 1, 'Redhead' = 2)
+re_cai.recov_sub$age    <- ifelse(re_cai.recov_sub$b_age == 2, 2, 1)
+
+
+# clean_releases_b <- clean.re_ca_sub %>%
+#                     subset(Regime == "B") %>%
+#                     group_by(sex,species,age,ecoregion) %>%
+#                     group_split()
+
+clean_releases_b <- clean.re_ca_sub %>%
+                     subset(Regime == "B" & PPH == 1) %>%
+                     group_by(sex,species,age,TYPE) %>%
+                     group_split()
+
+#clean.re_ca_sub$Flyway <-recode(clean.re_ca_sub$B.Flyway, `1` = 1, `2` = 2, `3`= 3, `4` = 3,`5` =5,  `6` = 6)
+clean_releases_w <-  clean.re_ca_sub %>%
+                     subset(Regime == "W") %>%
+                     subset(B.Flyway < 4) %>%
+                     group_by(sex,species,age,TYPE) %>%
+                     group_split()
+
+
+start <- 1951
+end <- 2020
+n.years <- end - start
+
+re_cai.recov_sub <- subset(re_cai.recov_sub, R.Month < 4 | R.Month > 8)
+re_cai.recov_sub$R.Year[which(re_cai.recov_sub$R.Month < 4)] <- re_cai.recov_sub$R.Year[which(re_cai.recov_sub$R.Month < 4)] - 1
+re_cai.recov_sub <- subset(re_cai.recov_sub, R.Year < end)
+
+# clean_recovs_b <- re_cai.recov_sub %>%
+#                   subset(Regime == "B") %>%
+#                   group_by(sex,species,age,ecoregion) %>%
+#                   group_split()
+
+
+clean_recovs_b <- re_cai.recov_sub %>%
+                  subset(Regime == "B" & PPH == 1) %>%
+                  group_by(sex,species,age,TYPE) %>%
+                  group_split()
+               
+
+#re_cai.recov_sub$Flyway <-recode(re_cai.recov_sub$B.Flyway, `1` = 1, `2` = 2, `3`= 3, `4` = 3,`5` =5,  `6` = 6)
+
+clean_recovs_w <- re_cai.recov_sub %>%
+                  subset(Regime == "W") %>%
+                  subset(B.Flyway < 4) %>%
+                  subset(B.Year > start) %>%
+                  group_by(sex,species,age,TYPE) %>%
+                  group_split()
+
+
+
+
+# ordering.b <- expand.grid( eco = c(1:5),  age = c('HY','AHY'), species = c('CANV','REDH'), sex = c('female','male') )
+# ordering.w <- expand.grid(flyway = c(1:3), species = c('CANV','REDH'), sex = c('female','male'))
+
+
+ordering.b <- expand.grid(Era =c('Early','Middle','Late'), age = c('HY','AHY'), species = c('CANV','REDH'), sex = c('female','male'))
+ordering.w <- expand.grid(Era =c('Early','Middle','Late'), age = c('SY','ASY'), species = c('CANV','REDH'), sex = c('female','male'))
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# Breeding Season 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+marr.main <- array(0, dim = c(n.years, n.years+1, nrow(ordering.b)))
+rel.main <- array(0, dim = c(n.years,nrow(ordering.b)))
+dim(marr.main)
+
+
+for(j in 1:nrow(ordering.b)){
+   for (i in 1:nrow(clean_releases_b[[j]] )){
+      rel.main[clean_releases_b[[j]]$B.Year[i] - start + 1,j] <- rel.main[clean_releases_b[[j]]$B.Year[i]- start + 1,j] + clean_releases_b[[j]]$Count.of.Birds[i]
+   }
+   
+   for (i in 1:nrow(clean_recovs_b[[j]])){
+      marr.main[(clean_recovs_b[[j]]$B.Year[i] - (start - 1)), (clean_recovs_b[[j]]$R.Year[i] - (start - 1)),j] <- marr.main[(clean_recovs_b [[j]]$B.Year[i] - (start - 1)), (clean_recovs_b[[j]]$R.Year[i] - (start - 1)),j] + 1
+   }
+   marr.main[,dim(marr.main)[2],j] <- rel.main[,j] - rowSums(marr.main[,,j])
+   
+   for (t in 2:n.years){
+      marr.main[t,1:(t-1),j] <- 0
+   }
+}  
+colSums(rel.main)
+
+
+ordering.b <- cbind.data.frame(ordering.b, colSums(rel.main))
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# Winter Season 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+
+start <- 1951
+end <- 2020
+n.years <- end - start
+
+marr.off <- array(0, dim = c(n.years, n.years+1, nrow(ordering.w)))
+rel.off <- array(0, dim = c(n.years,nrow(ordering.w)))
+dim(marr.off)
+
+
+for(j in 1:nrow(ordering.w)){
+   for (i in 1:nrow(clean_releases_w[[j]] )){
+      rel.off[clean_releases_w[[j]]$B.Year[i] - start,j] <- rel.off[clean_releases_w[[j]]$B.Year[i]- start,j] + clean_releases_w[[j]]$Count.of.Birds[i]
+   }
+
+   for (i in 1:nrow(clean_recovs_w[[j]])){
+      marr.off[(clean_recovs_w[[j]]$B.Year[i] - (start)), (clean_recovs_w[[j]]$R.Year[i] - (start - 1)),j] <- marr.off[(clean_recovs_w [[j]]$B.Year[i] - (start)), (clean_recovs_w[[j]]$R.Year[i] - (start - 1)),j] + 1
+   }
+   marr.off[,dim(marr.off)[2],j] <- rel.off[,j] - rowSums(marr.off[,,j])
+   
+   for (t in 2:n.years){
+      marr.off[t,1:(t-1),j] <- 0
+   }
+}  
+colSums(rel.off)
+
+
+ordering.w <- cbind.data.frame(ordering.w, colSums(rel.off))
+
+
+get.first <- function(x) min(which(x!=0))
+get.last <- function(x) max(which(x!=0))
+
+f <- apply(rel.main, 2, get.first)
+l <- apply(rel.main, 2, get.last)
+
+f.off <- apply(rel.off, 2, get.first)
+l.off <- apply(rel.off, 2, get.last)
+
