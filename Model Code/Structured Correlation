@@ -1,0 +1,106 @@
+################################################################################################
+# Is this an effective way to reduce the number of pairwise correlations to a meaninful number?
+################################################################################################
+
+# This is the grid of four, two-level factors (season: Breeding vs Winter; age: HY vs AHY; species: CANV vs REDH; sex: M vs F)
+order <- matrix(c(1,1,1,1,2,1,1,1,1,2,1,1,2,2,1,1,1,1,2,1,2,1,2,1,1,2,2,1,2,2,2,1,1,1,1,2,2,1,1,2,1,2,1,2,2,2,1,2,1,1,2,2,2,1,2,2,1,2,2,2,2,2,2,2), ncol = 4, byrow = TRUE)
+
+# Code to create positive definite covariance matrices
+Posdef <- function (n, ev = runif(n, 0, 10)) 
+{
+  Z <- matrix(ncol=n, rnorm(n^2))
+  decomp <- qr(Z)
+  Q <- qr.Q(decomp) 
+  R <- qr.R(decomp)
+  d <- diag(R)
+  ph <- d / abs(d)
+  O <- Q %*% diag(ph)
+  Z <- t(O) %*% diag(ev) %*% O
+  return(Z)
+}
+SigA <-  Posdef(n=2, ev=1:2)
+SigB <-  Posdef(n=2, ev=1:2)
+SigC <-  Posdef(n=2, ev=1:2)
+SigD <-  Posdef(n=2, ev=1:2)
+
+# Correlations for the 4 different things
+rho.age   <- cov2cor(SigA)
+rho.sex   <- cov2cor(SigB)
+rho.spec  <- cov2cor(SigC)
+rho.seas  <- cov2cor(SigD)
+
+# 
+v <- order[,1] 
+x <- order[,2] 
+y <- order[,3] 
+z <- order[,4] 
+
+# There are  2 x 2 x 2 x 2 types of things
+rho <- matrix(NA, 16,16)
+
+# Is it more informative to try and decompose the global correlation matrix into the specific subcompents of interest?
+for (i in 1:16){
+  for (j in 1:16){
+    rho[i, j] <- rho.seas[v[i], v[j]] * rho.age[x[i],x[j]] * rho.spec[y[i],y[j]] * rho.sex[z[i],z[j]] 
+  }
+}
+
+#############################################
+# What this would look like in JAGS/Nimble
+#############################################
+
+ for (i in 1:2){
+     rho.age[i,i] <- 1
+     rho.sex[i,i] <- 1
+    rho.spec[i,i] <- 1
+    rho.seas[i,i] <- 1
+    for (j in 1:(i - 1)) {
+      # correlations
+       rho.age[i, j] ~ dunif(-1, 1)
+       rho.age[j, i] <- rho.age[i, j]
+       rho.sex[i, j] ~ dunif(-1, 1)
+       rho.sex[j, i] <- rho.sex[i, j]
+      rho.spec[i, j] ~ dunif(-1, 1)
+      rho.spec[j, i] <- rho.spec[i, j]
+      rho.seas[i, j] ~ dunif(-1, 1)
+      rho.seas[j, i] <- rho.seas[i, j]
+    }
+  }
+  
+  for (i in 1:(n.species*n.sex*n.age*n.season)){
+            mu[i] <- 0
+           sig[i] ~ T(dt(0, pow(2.5, -2), 1), 0, )
+    for (j in 1:(n.species*n.sex*n.age*n.season)){
+        rho[i, j] <- rho.seas[v[i], v[j]] * rho.age[x[i],x[j]] * rho.spec[y[i],y[j]] * rho.sex[z[i],z[j]] 
+      Sigma[i, j] <- rho[i,j] * sig[i] * sig[j]
+    }
+  }
+    for (t in 1:n.occasions){
+
+     EPS[t, 1:(n.species*n.sex*n.age*n.season)] ~ dmnorm(mu[1:(n.species*n.sex*n.age*n.season)], 
+                                                         cov = Sigma[1:(n.species*n.sex*n.age*n.season),1:(n.species*n.sex*n.age*n.season)])
+   
+      eps[1,1,1,1,t] <- EPS[t,1]
+      eps[2,1,1,1,t] <- EPS[t,2]
+      eps[1,2,1,1,t] <- EPS[t,3]
+      eps[2,2,1,1,t] <- EPS[t,4]
+      eps[1,1,2,1,t] <- EPS[t,5]
+      eps[2,1,2,1,t] <- EPS[t,6]
+      eps[1,2,2,1,t] <- EPS[t,7]
+      eps[2,2,2,1,t] <- EPS[t,8]
+       
+      eps[1,1,1,2,t] <- EPS[t,9]
+      eps[2,1,1,2,t] <- EPS[t,10]
+      eps[1,2,1,2,t] <- EPS[t,11]
+      eps[2,2,1,2,t] <- EPS[t,12]
+      eps[1,1,2,2,t] <- EPS[t,13]
+      eps[2,1,2,2,t] <- EPS[t,14]
+      eps[1,2,2,2,t] <- EPS[t,15]
+      eps[2,2,2,2,t] <- EPS[t,16]
+       }
+  
+
+
+
+
+
