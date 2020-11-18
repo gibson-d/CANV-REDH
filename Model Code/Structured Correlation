@@ -1,5 +1,5 @@
 ################################################################################################
-# Is this an effective way to reduce the number of pairwise correlations to a meaninful number?
+# This is not a valid approach, but I may return to a similar idea in the future
 ################################################################################################
 
 # This is the grid of four, two-level factors (season: Breeding vs Winter; age: HY vs AHY; species: CANV vs REDH; sex: M vs F)
