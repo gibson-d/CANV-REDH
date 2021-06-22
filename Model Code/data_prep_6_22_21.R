@@ -890,7 +890,6 @@ initsFunction <- function()list(
   sigma.obs.strata= matrix(1,2, 33),
   beta.indirect = matrix(0,2,2),
   beta.winter = c(0,0),
-  
   rho = diag(6), sig.dem = runif(6,0,2),
   sig.sex = matrix(runif(4, 0, 1), 2,2),
   mu.kappa  = array(runif(8,-4,-1.5),dim = c(2,2,2)),
@@ -941,4 +940,4 @@ pars <- c("mean.sw","mean.sb",'mean.sj', 'SJ','SA')
 
 inits <- initsFunction() 
 
-rm(list=setdiff(ls(), c('dat','constants','pars','inits')))
+rm(list=setdiff(ls(), c('dat','constants','pars','inits','initsFunction','df','df1','ponds','pond.inits','y_inits','lny','rho.sex','BM1')))
